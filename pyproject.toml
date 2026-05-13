@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-researcher"
+version = "0.1.0"
+description = "Structured failure-diagnosis agent for production agents. Phase 1: hypothesis generator."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.40.0",
+]
+
+[project.scripts]
+agent-researcher = "agent_researcher.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_researcher = ["prompts/*.md"]
