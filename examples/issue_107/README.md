@@ -1,6 +1,6 @@
 # Example: issue 107
 
-The canonical worked example for Phase 1. Used both as a usage demo and as the failure case the system prompt was iterated against.
+The canonical worked example. Used both as a usage demo and as the failure case the system prompt was iterated against.
 
 ## The failure
 
@@ -21,9 +21,9 @@ Issue 107 is a *class-1 failure*:
 3. Genuinely ambiguous — the "right answer" requires nuance the model can plausibly miss
 4. Routing/classification — a clean target for hypothesis generation
 
-If Phase 1 produces useful hypotheses for issue 107, the same approach should produce useful hypotheses for other class-1 and class-2 failures (prompt and tool issues). If it produces only generic guesses, the closed loop should not be built on top.
+If `diagnose` produces useful hypotheses for issue 107, the same approach should produce useful hypotheses for other class-1 and class-2 failures (prompt and tool issues).
 
-## Running Phase 1 (diagnose)
+## Running diagnose
 
 ```bash
 python -m agent_researcher diagnose \
@@ -38,7 +38,7 @@ Adjust paths for your local checkout. The user message text for scenario 107 is 
 
 ## The produced report
 
-`report.md` in this directory is the actual Phase 1 run. All 9 `file:line` citations in that report were spot-checked against the real reference_agent files; all match.
+`report.md` in this directory is the actual `diagnose` run. All 9 `file:line` citations in that report were spot-checked against the real reference_agent files; all match.
 
 The report categorizes the failure as Layer 1 (the eval's expected answer may not be justified by the agent's documented rules) and produces three structurally distinct hypotheses:
 
@@ -46,9 +46,9 @@ The report categorizes the failure as Layer 1 (the eval's expected answer may no
 - H2 (Layer 1): the eval expects `unknown` for a 0.85-confidence case, but the agent's rules only direct `unknown` for the 0.5–0.7 band, so the disagreement may be between the eval author and the agent's documented behavior
 - H3 (Layer 2): no tool exists to disambiguate "docs wrong" vs "code wrong"
 
-Phase 1 reports in this repo follow the v4 format, which adds a structured edit spec to each hypothesis. H1 and H2 ship `applyable: true` specs; H3 ships `applyable: false` because it requires a new tool file rather than in-place edits.
+Each hypothesis ships a structured edit spec. H1 and H2 ship `applyable: true` specs; H3 ships `applyable: false` because it requires a new tool file rather than in-place edits.
 
-## Running Phase 2 (apply)
+## Running apply
 
 ```bash
 python -m agent_researcher apply \
@@ -63,13 +63,13 @@ The interpreter path matters: the eval subprocess needs the target agent's depen
 
 ## The produced delta
 
-`delta_h1.md` in this directory is the actual Phase 2 run applying hypothesis 1.
+`delta_h1.md` in this directory is the actual `apply` run for hypothesis 1.
 
 - Pass rate: 0.857 (6/7) → 1.000 (7/7)
 - Target scenario 107: `bug @ 0.75 (fail)` → `unknown @ 0.60 (pass)`
 - No other scenarios flipped status
 
-Worth knowing: this run modified `reference_agent/prompts/classification.j2` in the agent-skill-kit checkout. The change was reverted afterwards because reference_agent is a teaching artifact that intentionally has one failing scenario for future Phase 1 runs to diagnose. The delta report stands as the record; the source change does not.
+Worth knowing: this run modified `reference_agent/prompts/classification.j2` in the agent-skill-kit checkout. The change was reverted afterwards because reference_agent is a teaching artifact that intentionally has one failing scenario for future `diagnose` runs. The delta report stands as the record; the source change does not.
 
 ## Grading a future run
 
