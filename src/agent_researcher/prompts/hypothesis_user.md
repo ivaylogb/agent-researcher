@@ -53,4 +53,6 @@ Use these definitions when categorizing the failure's most likely layer. The sys
 
 Produce a hypothesis report following the structure specified in your system prompt. Generate 2-3 distinct hypotheses, ranked by likelihood. Each must cite specific evidence (file:line) from the agent code shown above.
 
+Each hypothesis's "Proposed change" section must include both the prose description AND a fenced ```json block with the structured edit spec defined in your system prompt — either `{{"applyable": true, "edits": [...]}}` or `{{"applyable": false, "reason": "..."}}`. The structured block is consumed by a downstream tool that applies the edit mechanically, so `expected_content` strings must match the file verbatim.
+
 Begin the report now.
