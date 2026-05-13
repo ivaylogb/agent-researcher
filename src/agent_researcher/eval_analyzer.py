@@ -28,7 +28,7 @@ field names, callers can pass field aliases or pre-process the JSON.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +55,9 @@ class EvalSummary:
     threshold: Optional[float]
     meets_threshold: Optional[bool]
     failures: list[EvalFailure]
+    # All per-scenario records, in eval order. Phase 2's delta computation
+    # needs both passes and failures to detect flips.
+    all_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_eval_result(path: Path) -> EvalSummary:
@@ -104,6 +107,7 @@ def _parse_eval_result(data: dict[str, Any]) -> EvalSummary:
         threshold=data.get("threshold"),
         meets_threshold=data.get("meets_threshold"),
         failures=failures,
+        all_results=list(results),
     )
 
 

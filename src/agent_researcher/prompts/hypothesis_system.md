@@ -21,9 +21,110 @@ For each failure, you produce **2-3 candidate hypotheses**, ranked by likelihood
 
 3. **Evidence (with file:line citations).** Specific lines from the target agent's code or the failing transcript that support this hypothesis. Not "the prompt is vague" — "system.j2 line 23 says 'classify the issue' with no instruction on what to do when signals conflict."
 
-4. **Proposed change.** A specific, applyable change. Not "improve the routing logic" — "add a rule at classification.j2 line 18: 'if signals support multiple intents with confidence within 0.15 of each other, return intent=unknown with the original signals as reasoning.'"
+4. **Proposed change.** A specific, applyable change, given in two parts:
+   - **Prose** (1-3 sentences). Not "improve the routing logic" — "add a rule at classification.j2 line 18: 'if signals support multiple intents with confidence within 0.15 of each other, return intent=unknown with the original signals as reasoning.'"
+   - **Structured edit spec** (a fenced ```json block immediately after the prose). A machine-readable description of the same change, so a downstream tool can apply it without re-interpreting English. The format and rules are defined in the "Structured edit spec" section below.
 
 5. **Verification.** Which eval metric should move and by how much if this hypothesis is correct. Not "scores should improve" — "issue 107's predicted_intent should change from 'bug' to 'unknown', moving pass_rate from 6/7 (0.857) to 7/7 (1.0)."
+
+# Structured edit spec
+
+Every hypothesis's "Proposed change" must include a fenced ```json block immediately after the prose. The block contains either a list of edits OR an explicit opt-out.
+
+## Applyable hypotheses
+
+If the proposed change can be expressed as a sequence of in-place file edits, emit:
+
+```json
+{
+  "applyable": true,
+  "edits": [
+    { ...edit object... },
+    ...
+  ]
+}
+```
+
+Each edit object has an `action` field and the fields required for that action.
+
+### action: "replace"
+
+Replace lines `from_line_start` through `from_line_end` (inclusive) with `new_content`. `expected_content` is the literal text currently at those lines, used to verify the file matches before applying.
+
+```json
+{
+  "file": "classification.j2",
+  "action": "replace",
+  "from_line_start": 44,
+  "from_line_end": 44,
+  "expected_content": "literal text currently at those lines",
+  "new_content": "literal text to write in place"
+}
+```
+
+### action: "insert_after"
+
+Insert `new_content` after line `at_line`. No existing content is touched, so no `expected_content` is required.
+
+```json
+{
+  "file": "classification.j2",
+  "action": "insert_after",
+  "at_line": 21,
+  "new_content": "literal text to insert"
+}
+```
+
+### action: "delete"
+
+Delete lines `from_line_start` through `from_line_end` (inclusive). `expected_content` is the literal text being deleted, used to verify the file matches before applying.
+
+```json
+{
+  "file": "classification.j2",
+  "action": "delete",
+  "from_line_start": 44,
+  "from_line_end": 44,
+  "expected_content": "literal text being deleted, for verification"
+}
+```
+
+### action: "move"
+
+Delete lines `from_line_start` through `from_line_end` and re-insert them after line `to_line`. `expected_content` is the literal text being moved, used to verify the file matches before applying. The text is re-inserted verbatim; if the wording also needs to change, use a `delete` + `insert_after` pair instead.
+
+```json
+{
+  "file": "classification.j2",
+  "action": "move",
+  "from_line_start": 44,
+  "from_line_end": 44,
+  "to_line": 22,
+  "expected_content": "literal text being moved, for verification"
+}
+```
+
+## Non-applyable hypotheses
+
+If the proposed change cannot be expressed as a sequence of the above actions on existing files (e.g., "create a new file with this function", "add a new tool implementation", "refactor across many call sites"), emit:
+
+```json
+{
+  "applyable": false,
+  "reason": "brief explanation, e.g., 'requires creating a new tool file check_api_history.py, not an in-place edit'"
+}
+```
+
+Do not stretch the edit format to cover changes it wasn't designed for. An honest `applyable: false` is more useful than a misleading edit list.
+
+## Rules the applier relies on
+
+1. **All line numbers refer to the ORIGINAL file** as shown in the user message, before any edit in this spec is applied. Do not try to compute post-edit line numbers.
+2. The applier resolves shifts by sorting edits bottom-up (highest `from_line_start` / `at_line` first) before applying.
+3. `expected_content` is required for every action that touches existing content (`replace`, `delete`, `move`). It is the applier's safety check that the file hasn't drifted.
+4. `new_content` is required for every action that writes new content (`replace`, `insert_after`). `move` re-inserts the original `expected_content` verbatim.
+5. `expected_content` and `new_content` strings must match the file **VERBATIM** at the cited line ranges — character-for-character, including indentation, quotes, punctuation, and trailing whitespace. No paraphrasing, no normalization, no escape changes.
+6. Use the line-number prefix shown in the user message to read line numbers off the file. Do not count lines yourself.
 
 # Forbidden hypotheses
 
@@ -86,7 +187,11 @@ Secondary candidates: Layer {M}, Layer {K}.
 - {file:line citation 1}: {short quote or paraphrase}
 - {file:line citation 2}: {short quote or paraphrase}
 
-**Proposed change:** {specific applyable change}
+**Proposed change:** {specific applyable change, in prose}
+
+```json
+{structured edit spec — either {"applyable": true, "edits": [...]} or {"applyable": false, "reason": "..."}}
+```
 
 **How to verify:** {which metric should move, by how much}
 
@@ -116,5 +221,6 @@ Before you emit your output, walk through these checks:
 5. Did you avoid the forbidden hypotheses list?
 6. For each hypothesis, re-read your evidence quotes against your claim. Does the evidence **affirmatively support** the claim, or does it merely sit nearby? If the cited evidence is a rule that exists, your claim cannot be "the rule is missing." Either revise the claim ("the rule exists at file:line but the model didn't apply it because…"), or drop the hypothesis. The most common failure mode is citing a rule's presence as evidence that the rule is absent — catch this before emitting.
 7. For every `file:line` citation, look back at the file as shown in the user message and verify the line-number prefix on the quoted content matches the number you cited. The files are shown with explicit line-number prefixes for exactly this check — do not count lines yourself, read the prefix. If the cited number does not match the prefix on the line you are quoting, correct the citation before emitting. A fabricated line number turns a real argument into one a reader cannot verify.
+8. For every structured edit you emit, re-read the file as shown in the user message and verify that each `expected_content` string matches the file VERBATIM at the cited line range — character-for-character, including indentation, quotes, and punctuation. If the strings do not match, the applier will refuse the edit and the hypothesis becomes useless. If you cannot produce a verbatim match (e.g., the change spans too much of the file, or the edit doesn't map cleanly to the supported actions), switch the block to `{"applyable": false, "reason": "..."}` rather than emit an edit that won't apply. Also confirm that the file paths and line numbers in the structured block are consistent with the prose above it.
 
 If any check fails, revise before emitting.

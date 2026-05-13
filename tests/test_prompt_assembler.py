@@ -61,6 +61,75 @@ def test_system_prompt_and_user_template_load() -> None:
     assert "{system_prompt}" in user_tmpl
 
 
+def test_system_prompt_documents_structured_edit_spec() -> None:
+    """Phase 2 needs each hypothesis to ship with a machine-applyable edit spec.
+    The system prompt must define the format, the four action types, the
+    applyable:false opt-out, and the applier's line-number conventions.
+    """
+    sys_prompt = load_system_prompt()
+
+    # The dedicated spec section exists.
+    assert "Structured edit spec" in sys_prompt
+
+    # All four v1 actions are documented.
+    assert '"replace"' in sys_prompt
+    assert '"insert_after"' in sys_prompt
+    assert '"delete"' in sys_prompt
+    assert '"move"' in sys_prompt
+
+    # The required edit-object fields are named.
+    assert "from_line_start" in sys_prompt
+    assert "from_line_end" in sys_prompt
+    assert "at_line" in sys_prompt
+    assert "to_line" in sys_prompt
+    assert "expected_content" in sys_prompt
+    assert "new_content" in sys_prompt
+
+    # The non-applyable escape hatch is documented.
+    assert '"applyable": false' in sys_prompt
+    assert '"applyable": true' in sys_prompt
+    assert "reason" in sys_prompt
+
+    # The applier-facing conventions are spelled out.
+    assert "ORIGINAL file" in sys_prompt  # line-number semantics
+    assert "VERBATIM" in sys_prompt       # exact-match requirement
+
+
+def test_system_prompt_proposed_change_requires_structured_block() -> None:
+    """The 'Proposed change' section must require both prose AND a json block,
+    in that order — not prose alone (Phase 1) and not json alone (would lose
+    human-readable rationale)."""
+    sys_prompt = load_system_prompt()
+    # The prose+structured pairing is described under Proposed change.
+    proposed_idx = sys_prompt.index("**Proposed change.**")
+    # Look in a window after that header for both halves.
+    window = sys_prompt[proposed_idx : proposed_idx + 1000]
+    assert "Prose" in window
+    assert "Structured edit spec" in window
+
+
+def test_system_prompt_adds_eighth_self_check() -> None:
+    """A new self-check must verify expected_content matches the file verbatim
+    and that file paths/line numbers in the structured block match the prose."""
+    sys_prompt = load_system_prompt()
+    # Self-checks are a numbered list; the new one is #8.
+    assert "\n8. " in sys_prompt
+    eighth_idx = sys_prompt.index("\n8. ")
+    eighth = sys_prompt[eighth_idx : eighth_idx + 800]
+    assert "expected_content" in eighth
+    assert "VERBATIM" in eighth
+    # Falling back to applyable:false is the prescribed escape route.
+    assert "applyable" in eighth and "false" in eighth
+
+
+def test_user_template_mentions_structured_block_requirement() -> None:
+    """The user template should reinforce that each hypothesis must ship the
+    structured JSON block, so the downstream applier has something to consume."""
+    user_tmpl = load_user_template()
+    assert "applyable" in user_tmpl
+    assert "structured edit spec" in user_tmpl.lower()
+
+
 def test_build_user_message_substitutes_all_fields() -> None:
     target = _target()
     msg = build_user_message(
