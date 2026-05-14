@@ -2,10 +2,11 @@
 
 A failure-diagnosis agent for other agents. When a target agent fails an eval, this reads the failing scenario and the target agent's source, produces a small set of structured hypotheses about the cause, applies one of those hypotheses, and re-runs the eval to measure the delta.
 
-Two subcommands:
+Three subcommands:
 
 - `diagnose`: produce 2–3 ranked hypotheses for one failing scenario. Each hypothesis is assigned to one of the four agent-engineering layers and cites specific `file:line` evidence from the target agent's code. Each hypothesis also ships a structured edit spec so the change can be applied mechanically.
 - `apply`: apply one hypothesis's edits to the target, re-run the eval, and emit a before/after delta report. The applier verifies every edit's expected content matches the file verbatim before writing; no edit, no eval run on a half-applied state.
+- `iterate`: apply every applyable hypothesis from a report against a shared baseline, re-run the eval after each one, and produce a comparison table that ranks hypotheses by measured outcome. Each hypothesis is applied, evaluated, and reverted before the next one runs, so every comparison is against the same starting point.
 
 ## The four layers
 
@@ -61,6 +62,22 @@ The interpreter in `--eval-command` matters. The eval subprocess inherits no env
 
 The applier never reverts. If the re-eval shows the hypothesis was a regression, the operator decides whether to `git checkout` the target's modified files. The delta report's "How to revert" section lists exactly which files were touched.
 
+### Iterate
+
+```bash
+python -m agent_researcher iterate \
+    --hypothesis-report outputs/issue_107.md \
+    --target-agent /path/to/reference_agent \
+    --eval-command "/path/to/target-agent/.venv/bin/python -m target_agent.evals.routing.run_eval" \
+    --output-file outputs/issue_107_iteration.md
+```
+
+`iterate` runs a baseline eval, then for each hypothesis in the report: snapshots the target's files, applies the hypothesis, runs the eval, reverts the snapshot, and records the delta. Hypotheses with `applyable: false` are skipped and listed in the comparison. The output is a ranked table (pass-rate delta, target-scenario flip, other flips, files modified) plus per-hypothesis detail. The hypothesis with the best measured outcome is highlighted in the summary.
+
+The revert is what makes the comparison meaningful: every hypothesis is evaluated against the same baseline, not against the cumulative state of the previous hypothesis's edits.
+
+`--dry-run` shows which hypotheses would apply and how many evals would run, without modifying anything.
+
 ## Report shape
 
 Each report has:
@@ -76,17 +93,21 @@ Each report has:
 
 ## Worked example
 
-`examples/issue_107/` runs the agent against agent-skill-kit's reference_agent on the only failing scenario in its routing eval. It carries two artifacts: the diagnosis (`report.md`) and the delta from applying hypothesis 1 (`delta_h1.md`).
+`examples/issue_107/` runs the agent against agent-skill-kit's reference_agent on the only failing scenario in its routing eval. It carries three artifacts: the diagnosis (`report.md`), the delta from applying hypothesis 1 in isolation (`delta_h1.md`), and the iteration comparing every applyable hypothesis head-to-head (`iteration.md`).
 
 A taste of what the `diagnose` output looks like — the Layer categorization section from the worked example:
 
-> This failure most likely sits in **Layer 1 (Evaluation)**.
+> This failure most likely sits in **Layer 3 (Context)**.
 >
-> Reasoning: The agent classified this as `bug` with confidence 0.85, which exceeds the 0.7 threshold specified in `agent.yaml:30`. The classification prompt at `classification.j2:44` explicitly instructs "Mixed signals (e.g., 'the docs are wrong AND I think this is a bug') → `unknown`." The agent has a rule that directly addresses this case. However, the eval's expected answer is `unknown` while the agent followed a different interpretation: that the user's evidence (stack trace, version number, reproduction) constitutes a clear bug signal, and the docs disagreement is secondary context. The question is whether the eval's expectation reflects an agent rule that does not exist in writing, or whether the agent misapplied rule `classification.j2:44`.
+> Reasoning: The classification prompt *does* contain a tie-break rule for mixed signals (classification.j2:44 — "Mixed signals (e.g., 'the docs are wrong AND I think this is a bug') → `unknown`"), which is almost a verbatim match for issue 107's framing. But this rule lives in a "Calibration notes" bullet list near the end of the prompt, after the intents and confidence bands, where it competes with the much more prominent `bug` signals enumerated at line 10 ("error messages, stack traces, … reproduction steps, version numbers") — all of which issue 107 also contains. The model picked the salient prominent signal-set match over the buried tie-break rule.
 
-The full report produces three structurally distinct hypotheses (one Layer 3, one Layer 1, one Layer 2) with applyable proposed changes. All 9 `file:line` citations in it were spot-checked against the real source files; all matched. See `examples/issue_107/AUTHORING_BASELINE.md` for the methodology used to grade a `diagnose` run.
+The full report produces three structurally distinct hypotheses (one Layer 3, one Layer 1, one Layer 4), two with applyable structured edits. The Layer 4 hypothesis ships `applyable: false` because it requires a multi-line cross-cutting addition to `runner.py` rather than an in-place edit. 4 of the report's `file:line` citations were spot-checked against the real source files during the run; all matched. The citation format is line-numbered, so any reader can verify the others against the live source. See `examples/issue_107/AUTHORING_BASELINE.md` for the methodology used to grade a `diagnose` run.
 
-`delta_h1.md` shows the result of applying hypothesis 1: pass rate moved from 0.857 (6/7) to 1.000 (7/7), the target scenario flipped from `bug @ 0.75 (fail)` to `unknown @ 0.60 (pass)`, and no other scenarios changed status.
+`delta_h1.md` shows the result of applying hypothesis 1 in isolation: pass rate moved from 0.857 (6/7) to 1.000 (7/7), the target scenario flipped from `bug @ 0.75 (fail)` to `unknown @ 0.60 (pass)`, and no other scenarios changed status.
+
+`iteration.md` runs both applyable hypotheses against the same baseline. H1 (Layer 3 — promote the buried mixed-signals rule to the top of the prompt) lifted pass rate by +0.143 and fixed scenario 107. H2 (Layer 1 — tighten the wording of the 0.7–0.9 confidence band) edited the same file with a different mechanism and moved the pass rate by 0.000. The layer-3 framing of the failure — that the right rule existed but was structurally buried — was the one that produced a measured improvement. The layer-1 framing was falsified by the eval. H3 was correctly skipped. The agent-skill-kit working tree reverted between hypotheses and ended identical to the starting state.
+
+A note on variance: single-run eval results are subject to temperature variance in the target agent's underlying model. Five fresh runs of the routing eval against the unmodified reference_agent produced scenario 107 classified as `bug` 5/5 times, with confidence ranging 0.75–0.85, so the failure is at least reproducible. But `iterate`'s pass-rate deltas are directional signals, not statistically verified rankings. Operators who want a verified ranking should re-run the iteration, or author single-mechanism hypotheses (see below).
 
 ### Single-mechanism hypotheses for clean ablation
 
@@ -118,7 +139,7 @@ The line-number check exists because earlier iterations of the agent reliably fa
 python -m pytest tests/
 ```
 
-60 tests cover the loader, eval analyzer, prompt assembler (including line-numbering and Jinja-brace survival), hypothesis agent (via a stub client; no API calls), the applier (report parsing, all four edit actions, verbatim verification, multi-edit composition, overlap detection, dry-run, non-applyable opt-out), and the delta module (pass-rate change, target-scenario flip, collateral flips, markdown rendering).
+87 tests cover the loader, eval analyzer, prompt assembler (including line-numbering and Jinja-brace survival), hypothesis agent (via a stub client; no API calls), the applier (report parsing, all four edit actions, verbatim verification, multi-edit composition, overlap detection, dry-run, non-applyable opt-out), the delta module (pass-rate change, target-scenario flip, collateral flips, markdown rendering), the iterate orchestrator (per-hypothesis apply-eval-revert sequencing, skip handling, best-result selection, baseline reuse), and the comparison renderer (ranked table, delta arrows, regression flagging).
 
 ## License
 

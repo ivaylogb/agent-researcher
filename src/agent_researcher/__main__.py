@@ -21,13 +21,15 @@ from pathlib import Path
 
 from .applier import EditSpec, apply_edits, parse_hypothesis_report
 from .code_reader import load_target_agent
+from .comparison import render_iteration_report
 from .delta import compute_delta, render_delta_markdown
 from .eval_analyzer import load_eval_result, select_failure
 from .eval_runner import EvalRunError, run_eval
 from .hypothesis_agent import generate_hypotheses
+from .orchestrator import iterate as orchestrate_iterate
 
 
-_KNOWN_SUBCOMMANDS = {"diagnose", "apply"}
+_KNOWN_SUBCOMMANDS = {"diagnose", "apply", "iterate"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,12 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     _add_diagnose_parser(subparsers)
     _add_apply_parser(subparsers)
+    _add_iterate_parser(subparsers)
 
     args = parser.parse_args(raw)
     if args.subcommand == "diagnose":
         return _run_diagnose(args)
     if args.subcommand == "apply":
         return _run_apply(args)
+    if args.subcommand == "iterate":
+        return _run_iterate(args)
     parser.error(f"Unknown subcommand: {args.subcommand}")
     return 2  # unreachable; argparse.error exits.
 
@@ -384,6 +389,178 @@ def _infer_target_scenario_id(report_path: Path, summary) -> str:
     if summary.failures:
         return summary.failures[0].scenario_id
     return "unknown"
+
+
+# ---------- iterate ----------
+
+
+def _add_iterate_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "iterate",
+        help="Apply every applyable hypothesis from a report and compare results.",
+    )
+    p.add_argument(
+        "--hypothesis-report",
+        type=Path,
+        required=True,
+        help="Path to a diagnose report (containing structured edit specs).",
+    )
+    p.add_argument(
+        "--target-agent",
+        type=Path,
+        required=True,
+        help="Path to the target agent's directory.",
+    )
+    p.add_argument(
+        "--eval-command",
+        type=str,
+        required=True,
+        help='Shell-style command to run the eval, e.g. '
+             '"python -m reference_agent.evals.routing.run_eval".',
+    )
+    p.add_argument(
+        "--eval-cwd",
+        type=Path,
+        default=None,
+        help="Working directory for the eval subprocess. Defaults to the parent "
+             "of --target-agent.",
+    )
+    p.add_argument(
+        "--eval-result-path",
+        type=Path,
+        default=None,
+        help="If set, read the eval's result JSON from this path instead of stdout.",
+    )
+    p.add_argument(
+        "--eval-timeout",
+        type=int,
+        default=300,
+        help="Eval subprocess timeout in seconds (default 300).",
+    )
+    p.add_argument(
+        "--output-file",
+        type=Path,
+        default=None,
+        help="Write the iteration report to this file (in addition to stdout).",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse the report, list applyable hypotheses, show the snapshot "
+             "plan, and exit. Does not run any evals or write any files.",
+    )
+
+
+def _run_iterate(args: argparse.Namespace) -> int:
+    report_path: Path = args.hypothesis_report
+    target_agent: Path = args.target_agent
+
+    if not report_path.is_file():
+        print(f"Hypothesis report not found: {report_path}", file=sys.stderr)
+        return 2
+    if not target_agent.is_dir():
+        print(f"Target agent directory not found: {target_agent}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        return _iterate_dry_run(report_path, target_agent)
+
+    try:
+        report = orchestrate_iterate(
+            report_path,
+            target_agent,
+            args.eval_command,
+            eval_cwd=args.eval_cwd,
+            eval_result_path=args.eval_result_path,
+            eval_timeout=args.eval_timeout,
+        )
+    except FileNotFoundError as e:
+        print(f"Iterate input error: {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"Iterate input error: {e}", file=sys.stderr)
+        return 2
+    except EvalRunError as e:
+        print(
+            f"Baseline eval failed: {e}\n"
+            "Cannot proceed without a baseline. Target was not modified.",
+            file=sys.stderr,
+        )
+        return 5
+    except BaseException as e:  # noqa: BLE001 — intentional catastrophic catch
+        print(
+            f"Catastrophic orchestration error: {type(e).__name__}: {e}\n"
+            "Target may be in an unknown state. Verify the working tree of "
+            f"{target_agent} manually before re-running.",
+            file=sys.stderr,
+        )
+        return 8
+
+    markdown = render_iteration_report(report)
+    print(markdown)
+
+    if args.output_file is not None:
+        args.output_file.parent.mkdir(parents=True, exist_ok=True)
+        args.output_file.write_text(markdown)
+        print(f"\n[wrote iteration report to {args.output_file}]", file=sys.stderr)
+
+    return 0
+
+
+def _iterate_dry_run(report_path: Path, target_agent: Path) -> int:
+    """Plan-only path: list hypotheses and the snapshot plan, run no evals."""
+    text = report_path.read_text()
+    import re as _re
+    header_re = _re.compile(
+        r"^###\s+Hypothesis\s+(\d+)\b(.*)$", _re.MULTILINE | _re.IGNORECASE
+    )
+    ids = [int(m.group(1)) for m in header_re.finditer(text)]
+    if not ids:
+        print(
+            f"Report contains no '### Hypothesis N:' headers: {report_path}",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"[dry-run] Report: {report_path}")
+    print(f"[dry-run] Target: {target_agent}")
+    print(f"[dry-run] Hypotheses found: {len(ids)} ({', '.join(f'H{i}' for i in ids)})")
+    print()
+
+    applyable_count = 0
+    skipped_count = 0
+    for hid in ids:
+        try:
+            spec = parse_hypothesis_report(report_path, hid)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"  H{hid}: would fail to parse — {e}")
+            continue
+
+        if not spec.applyable:
+            print(f"  H{hid}: SKIP (applyable: false — {spec.reason})")
+            skipped_count += 1
+            continue
+
+        try:
+            planned = apply_edits(target_agent, spec, dry_run=True)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"  H{hid}: would fail to apply — {e}")
+            continue
+
+        touched = [str(c.path) for c in planned if c.changed]
+        print(f"  H{hid}: APPLY ({len(spec.edits)} edit(s), {len(touched)} file(s) to snapshot)")
+        for path in touched:
+            print(f"      - {path}")
+        applyable_count += 1
+
+    print()
+    print("[dry-run] Plan summary:")
+    print(f"  - Baseline eval: would run 1 time")
+    print(f"  - Applyable hypotheses: {applyable_count} (each gets a re-eval)")
+    print(f"  - Skipped hypotheses: {skipped_count}")
+    print(f"  - Total eval invocations: {1 + applyable_count}")
+    print("[dry-run] No evals were run. No files were modified.")
+    return 0
 
 
 if __name__ == "__main__":
