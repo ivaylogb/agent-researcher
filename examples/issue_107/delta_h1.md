@@ -1,5 +1,7 @@
 # Apply-and-re-eval delta: scenario 107
 
+_Worked example output. File paths reference the agent under test (reference_agent in agent-skill-kit) as it was structured at run time._
+
 ## Hypothesis applied
 
 **Hypothesis 1: Mixed-signal guidance is buried and loses salience competition (Layer 3)**

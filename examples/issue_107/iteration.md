@@ -1,5 +1,7 @@
 # Iteration report: scenario 107
 
+_Worked example output. File paths reference the agent under test (reference_agent in agent-skill-kit) as it was structured at run time._
+
 ## Summary
 
 Best result: H1 (pass_rate 0.857 → 1.000, target scenario fixed, no regressions).
