@@ -27,8 +27,8 @@ If `diagnose` produces useful hypotheses for issue 107, the same approach should
 
 ```bash
 python -m agent_researcher diagnose \
-    --target-agent ../agent-skill-kit/reference_agent \
-    --eval-result ../agent-skill-kit/reference_agent/evals/routing/last_run.json \
+    --target-agent path/to/agent-skill-kit/reference_agent \
+    --eval-result path/to/agent-skill-kit/reference_agent/evals/routing/last_run.json \
     --scenario-id 107 \
     --scenario-input-file /path/to/issue_107_input.txt \
     --output-file outputs/issue_107.md
@@ -54,8 +54,8 @@ Each hypothesis ships a structured edit spec. H1 and H2 ship `applyable: true` s
 python -m agent_researcher apply \
     --hypothesis-report examples/issue_107/report.md \
     --hypothesis-id 1 \
-    --target-agent ../agent-skill-kit/reference_agent \
-    --eval-command "../agent-skill-kit/.venv/bin/python -m reference_agent.evals.routing.run_eval" \
+    --target-agent path/to/agent-skill-kit/reference_agent \
+    --eval-command "path/to/agent-skill-kit/.venv/bin/python -m reference_agent.evals.routing.run_eval" \
     --output-file outputs/issue_107_h1_delta.md
 ```
 
@@ -69,15 +69,13 @@ The interpreter path matters: the eval subprocess needs the target agent's depen
 - Target scenario 107: `bug @ 0.75 (fail)` → `unknown @ 0.60 (pass)`
 - No other scenarios flipped status
 
-Worth knowing: this run modified `reference_agent/prompts/classification.j2` in the agent-skill-kit checkout. The change was reverted afterwards because reference_agent is a teaching artifact that intentionally has one failing scenario for future `diagnose` runs. The delta report stands as the record; the source change does not.
-
 ## Running iterate
 
 ```bash
 python -m agent_researcher iterate \
     --hypothesis-report examples/issue_107/report.md \
-    --target-agent ../agent-skill-kit/reference_agent \
-    --eval-command "../agent-skill-kit/.venv/bin/python -m reference_agent.evals.routing.run_eval" \
+    --target-agent path/to/agent-skill-kit/reference_agent \
+    --eval-command "path/to/agent-skill-kit/.venv/bin/python -m reference_agent.evals.routing.run_eval" \
     --output-file outputs/issue_107_iteration.md
 ```
 
