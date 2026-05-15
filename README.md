@@ -1,5 +1,7 @@
 # agent-researcher
 
+*Reference implementation of [agent-diagnosis-spec](https://github.com/ivaylogb/agent-diagnosis-spec) v0.1.*
+
 A failure-diagnosis agent for other agents. When a target agent fails an eval, this reads the failing scenario and the target agent's source, produces a small set of structured hypotheses about the cause, applies one of those hypotheses, and re-runs the eval to measure the delta.
 
 Three subcommands:
